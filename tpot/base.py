@@ -42,6 +42,7 @@ from sklearn.pipeline import make_pipeline, make_union
 from sklearn.preprocessing import FunctionTransformer, Imputer
 from sklearn.model_selection import train_test_split
 from sklearn.metrics.scorer import make_scorer
+from sklearn.ensemble import VotingClassifier
 
 from update_checker import update_check
 
@@ -201,6 +202,7 @@ class TPOTBase(BaseEstimator):
 
         self._pareto_front = None
         self._optimized_pipeline = None
+        self._pipeline_ensemble_list = None
         self.fitted_pipeline_ = None
         self._fitted_imputer = None
         self._pop = None
@@ -514,7 +516,7 @@ class TPOTBase(BaseEstimator):
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter('ignore')
-                pop, _ = eaMuPlusLambda(
+                pop, _, self._pipeline_ensemble_list = eaMuPlusLambda(
                     population=pop,
                     toolbox=self._toolbox,
                     mu=self.population_size,
@@ -549,11 +551,9 @@ class TPOTBase(BaseEstimator):
 
                     # Store the pipeline with the highest internal testing score
                     if self._pareto_front:
-                        self._update_top_pipeline()
-
                         # It won't raise error for a small test like in a unit test because a few pipeline sometimes
                         # may fail due to the training data does not fit the operator's requirement.
-                        if not self._optimized_pipeline:
+                        if not self._pipeline_ensemble_list:
                             print('There was an error in the TPOT optimization '
                                   'process. This could be because the data was '
                                   'not formatted properly, or because data for '
@@ -561,7 +561,7 @@ class TPOTBase(BaseEstimator):
                                   'TPOTClassifier object. Please make sure you '
                                   'passed the data to TPOT correctly.')
                         else:
-                            self.fitted_pipeline_ = self._toolbox.compile(expr=self._optimized_pipeline)
+                            self.fitted_pipeline_ = VotingClassifier(estimators=self._pipeline_ensemble_list)
 
                             with warnings.catch_warnings():
                                 warnings.simplefilter('ignore')
@@ -571,7 +571,7 @@ class TPOTBase(BaseEstimator):
                                 # Add an extra line of spacing if the progress bar was used
                                 if self.verbosity >= 2:
                                     print('')
-                                print('Best pipeline: {}'.format(self._optimized_pipeline))
+                                print('Best pipeline: {}'.format(self._pipeline_ensemble_list))
 
                             # Store and fit the entire Pareto front as fitted models for convenience
                             self.pareto_front_fitted_pipelines_ = {}
@@ -588,15 +588,6 @@ class TPOTBase(BaseEstimator):
                     if attempt == (attempts - 1):
                         raise
             return self
-
-    def _update_top_pipeline(self):
-        """Helper function to update the _optimized_pipeline field."""
-        if self._pareto_front:
-            top_score = -float('inf')
-            for pipeline, pipeline_scores in zip(self._pareto_front.items, reversed(self._pareto_front.keys)):
-                if pipeline_scores.wvalues[1] > top_score:
-                    self._optimized_pipeline = pipeline
-                    top_score = pipeline_scores.wvalues[1]
 
     def predict(self, features):
         """Use the optimized pipeline to predict the target for a feature set.
@@ -808,7 +799,7 @@ class TPOTBase(BaseEstimator):
                     setattr(obj, parameter, value)
 
 
-    def _evaluate_individuals(self, individuals, features, target, sample_weight=None, groups=None):
+    def _evaluate_individuals(self, individuals, features, target, sample_weight=None, groups=None, pipeline_ensemble_list=None):
         """Determine the fit of the provided individuals.
 
         Parameters
@@ -856,20 +847,10 @@ class TPOTBase(BaseEstimator):
                 fitnesses_dict[indidx] = (5000., -float('inf'))
                 if not self._pbar.disable:
                     self._pbar.update(1)
-            # Check if the individual was evaluated before
-            elif individual_str in self.evaluated_individuals_:
-                # Get fitness score from previous evaluation
-                fitnesses_dict[indidx] = self.evaluated_individuals_[individual_str]
-                if self.verbosity > 2:
-                    self._pbar.write('Pipeline encountered that has previously been evaluated during the '
-                                     'optimization process. Using the score from the previous evaluation.')
-                if not self._pbar.disable:
-                    self._pbar.update(1)
             else:
                 try:
                     # Transform the tree expression into an sklearn pipeline
                     sklearn_pipeline = self._toolbox.compile(expr=individual)
-
 
                     # Fix random state when the operator allows and build sample weight dictionary
                     self._set_param_recursive(sklearn_pipeline.steps, 'random_state', 42)
@@ -882,6 +863,10 @@ class TPOTBase(BaseEstimator):
                     if not self._pbar.disable:
                         self._pbar.update(1)
                     continue
+                
+                if pipeline_ensemble_list is not None:
+                    sklearn_pipeline = VotingClassifier(estimators=pipeline_ensemble_list + [('evaluate', sklearn_pipeline)])
+                
                 eval_individuals_str.append(individual_str)
                 operator_count_list.append(operator_count)
                 sklearn_pipeline_list.append(sklearn_pipeline)

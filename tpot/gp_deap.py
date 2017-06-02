@@ -161,6 +161,8 @@ def eaMuPlusLambda(population, toolbox, mu, lambda_, cxpb, mutpb, ngen, pbar,
 
     record = stats.compile(population) if stats is not None else {}
     logbook.record(gen=0, nevals=len(invalid_ind), **record)
+    
+    pipeline_ensemble_list = []
 
     # Begin the generational process
     for gen in range(1, ngen + 1):
@@ -169,7 +171,7 @@ def eaMuPlusLambda(population, toolbox, mu, lambda_, cxpb, mutpb, ngen, pbar,
         offspring = varOr(population, toolbox, lambda_, cxpb, mutpb)
 
         # Evaluate the individuals with an invalid fitness
-        invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
+        invalid_ind = offspring
 
         # update pbar for valid_ind
         if not pbar.disable:
@@ -177,9 +179,18 @@ def eaMuPlusLambda(population, toolbox, mu, lambda_, cxpb, mutpb, ngen, pbar,
             if not (max_time_mins is None) and pbar.n >= pbar.total:
                 pbar.total += lambda_
 
-        fitnesses = toolbox.evaluate(invalid_ind)
+        fitnesses = toolbox.evaluate(invalid_ind, pipeline_ensemble_list=pipeline_ensemble_list)
+        best_gen_ind = None
+        best_gen_fitness = -float('inf')
         for ind, fit in zip(invalid_ind, fitnesses):
             ind.fitness.values = fit
+            if fit[1] > best_gen_fitness:
+                best_gen_fitness = fit[1]
+                best_gen_ind = ind
+
+        best_gen_ind_sklearn_pipeline = toolbox.compile(expr=best_gen_ind)
+        best_gen_ind_ensemble_entry = ('pipeline{}'.format(gen), best_gen_ind_sklearn_pipeline)
+        pipeline_ensemble_list.append(best_gen_ind_ensemble_entry)
 
         # Update the hall of fame with the generated individuals
         if halloffame is not None:
@@ -211,7 +222,7 @@ def eaMuPlusLambda(population, toolbox, mu, lambda_, cxpb, mutpb, ngen, pbar,
         record = stats.compile(population) if stats is not None else {}
         logbook.record(gen=gen, nevals=len(invalid_ind), **record)
 
-    return population, logbook
+    return population, logbook, pipeline_ensemble_list
 
 
 def cxOnePoint(ind1, ind2):
@@ -351,7 +362,7 @@ def _wrapped_cross_val_score(sklearn_pipeline, features, target,
                              cv, scoring_function, sample_weight,
                              max_eval_time_mins, groups):
     max_time_seconds = max(int(max_eval_time_mins * 60), 1)
-    sample_weight_dict = set_sample_weight(sklearn_pipeline.steps, sample_weight)
+    #sample_weight_dict = set_sample_weight(sklearn_pipeline.steps, sample_weight)
     # build a job for cross_val_score
     tmp_it = Interruptable_cross_val_score(
         clone(sklearn_pipeline),
@@ -361,7 +372,7 @@ def _wrapped_cross_val_score(sklearn_pipeline, features, target,
         cv=cv,
         n_jobs=1,
         verbose=0,
-        fit_params=sample_weight_dict,
+        #fit_params=sample_weight_dict,
         groups=groups
     )
     tmp_it.start()
