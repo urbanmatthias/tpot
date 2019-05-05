@@ -9,9 +9,9 @@ from data_management.data_manager import DataManager
 import argparse
 import tempfile
 import time
-from threading import Timer
 
 from tpot import TPOTClassifier
+import multiprocessing
 
 import numpy as np
 import scipy as sp
@@ -96,13 +96,9 @@ def main(dataset_name, dataset_id):
         verbosity=0
     )
 
-    def exit_func():
-        exit(0)
-
-    Timer(92400, exit_func).start()
-    print("Time", "Generation", "Score", sep=",", file=f)
-
     with open(os.path.join(tempfile.gettempdir(), "result.csv"), "w") as f:
+        print("Time", "Generation", "Score", sep=",", file=f)
+        f.flush()
         while time.time() - start_time < 92400:
             print(time.time() - start_time, generation)
 
@@ -112,6 +108,7 @@ def main(dataset_name, dataset_id):
             generation += 1
 
             print(time.time() - start_time, generation, score, sep=",", file=f)
+            f.flush()
 
 
 if __name__ == '__main__':
@@ -119,4 +116,8 @@ if __name__ == '__main__':
 
     with open("openml_datasets.txt", "r") as f:
         dataset_name = list(f)[dataset_id].strip()
-    main(dataset_name, dataset_id)
+    p = multiprocessing.Process(target=main, name="tpot", args=(dataset_name, dataset_id))
+    p.start()
+    p.join(100000)
+    if p.is_alive():
+        p.terminate()
